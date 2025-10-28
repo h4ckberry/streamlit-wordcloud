@@ -3,6 +3,8 @@ import json
 import html
 import re
 import streamlit as st
+from pathlib import Path
+from urllib.request import urlopen
 from janome.tokenizer import Tokenizer
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
@@ -182,8 +184,46 @@ height = st.number_input(
 # 背景色の選択
 background_color = st.color_picker("背景色を選択してください", "#ffffff")
 
-# フォントファイルのパス（ワークスペースに存在するファイル名に合わせる）
-font_path = "NotoSansJP-VariableFont_wght.ttf"
+# フォント（UI と 画像生成）の設定
+# 1) UI用のWebフォント適用（任意）
+use_google_font_ui = st.checkbox("UIに Google Fonts (Noto Sans JP) を適用する", value=False)
+if use_google_font_ui:
+    st.markdown(
+        """
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@100..900&display=swap');
+        html, body, [class*="css"]  { font-family: 'Noto Sans JP', sans-serif; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# 2) WordCloud用フォントの選択（TTF/OTFファイルが必要）
+default_font_path = "NotoSansJP-VariableFont_wght.ttf"
+font_download_url = st.text_input(
+    "WordCloud用フォントURL（TTF/OTF、空欄ならローカルのフォントを使用）",
+    value="",
+    placeholder="例: https://example.com/NotoSansJP-VariableFont_wght.ttf",
+)
+
+def _download_font_to_cache(url: str) -> str | None:
+    try:
+        cache_dir = Path(".cache/fonts")
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        filename = url.split("?")[0].split("/")[-1] or "downloaded-font.ttf"
+        dest = cache_dir / filename
+        with urlopen(url) as resp, open(dest, "wb") as f:
+            f.write(resp.read())
+        return str(dest)
+    except Exception as e:
+        st.error(f"フォントのダウンロードに失敗しました: {e}")
+        return None
+
+font_path = default_font_path
+if font_download_url.strip():
+    maybe = _download_font_to_cache(font_download_url.strip())
+    if maybe:
+        font_path = maybe
 
 # フォントファイルの存在確認
 if not os.path.exists(font_path):
