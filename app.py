@@ -5,6 +5,7 @@ import re
 import streamlit as st
 from pathlib import Path
 from urllib.request import urlopen
+from tempfile import NamedTemporaryFile
 from janome.tokenizer import Tokenizer
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
@@ -206,29 +207,22 @@ font_download_url = st.text_input(
     placeholder="例: https://example.com/NotoSansJP-VariableFont_wght.ttf",
 )
 
-def _download_font_to_cache(url: str) -> str | None:
+def _download_font_to_tmp(url: str) -> str | None:
+    """指定URLからフォント(TTF/OTF)を一時ファイルに保存し、パスを返す。呼び出し側で削除すること。"""
     try:
-        cache_dir = Path(".cache/fonts")
-        cache_dir.mkdir(parents=True, exist_ok=True)
         filename = url.split("?")[0].split("/")[-1] or "downloaded-font.ttf"
-        dest = cache_dir / filename
-        with urlopen(url) as resp, open(dest, "wb") as f:
-            f.write(resp.read())
-        return str(dest)
+        suffix = "." + (filename.split(".")[-1] if "." in filename else "ttf")
+        with urlopen(url) as resp, NamedTemporaryFile(delete=False, suffix=suffix) as tf:
+            tf.write(resp.read())
+            return tf.name
     except Exception as e:
         st.error(f"フォントのダウンロードに失敗しました: {e}")
         return None
 
-font_path = default_font_path
-if font_download_url.strip():
-    maybe = _download_font_to_cache(font_download_url.strip())
-    if maybe:
-        font_path = maybe
-
-# フォントファイルの存在確認
-if not os.path.exists(font_path):
+# フォントファイルの存在確認（URL未指定の場合のみ）
+if not font_download_url.strip() and not os.path.exists(default_font_path):
     st.error(
-        f"指定されたフォントが見つかりません。フォントパスを確認してください: {font_path}"
+        f"指定されたフォントが見つかりません。フォントパスを確認してください: {default_font_path}"
     )
     st.stop()
 
@@ -292,10 +286,19 @@ if st.button("Wordcloud_slackver を生成"):
     elif not selected_pos:
         st.error("少なくとも1つの品詞を選択してください。")
     else:
+        tmp_font_path = None
         try:
+            # URL指定時は都度ダウンロード（ローカルにファイルを残さない）
+            effective_font_path = default_font_path
+            if font_download_url.strip():
+                tmp_font_path = _download_font_to_tmp(font_download_url.strip())
+                if not tmp_font_path:
+                    st.stop()
+                effective_font_path = tmp_font_path
+
             wc = generate_wordcloud(
                 user_input, width, height, background_color,
-                font_path, selected_pos, exclude_words
+                effective_font_path, selected_pos, exclude_words
             )
 
             # ワードクラウドの描画
@@ -307,3 +310,10 @@ if st.button("Wordcloud_slackver を生成"):
             st.pyplot(fig)
         except Exception as e:
             st.error(f"エラーが発生しました: {e}")
+        finally:
+            # 一時フォントは削除
+            if tmp_font_path:
+                try:
+                    os.remove(tmp_font_path)
+                except Exception:
+                    pass
