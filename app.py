@@ -199,32 +199,27 @@ if use_google_font_ui:
         unsafe_allow_html=True,
     )
 
-# 2) WordCloud用フォントの選択（TTF/OTFファイルが必要）
-default_font_path = "NotoSansJP-VariableFont_wght.ttf"
-font_download_url = st.text_input(
-    "WordCloud用フォントURL（TTF/OTF、空欄ならローカルのフォントを使用）",
-    value="",
-    placeholder="例: https://example.com/NotoSansJP-VariableFont_wght.ttf",
-)
+# 2) WordCloud用フォント（TTF/OTF）は常にWebから取得して使用（ローカルに保持しない）
+FONT_CANDIDATE_URLS = [
+    # 変動する可能性があるため候補を複数用意（上から順にトライ）
+    "https://github.com/googlefonts/noto-cjk/raw/main/Sans/Variable/TTF/NotoSansJP-VF.ttf",
+    "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansJP-Regular.otf",
+]
 
-def _download_font_to_tmp(url: str) -> str | None:
-    """指定URLからフォント(TTF/OTF)を一時ファイルに保存し、パスを返す。呼び出し側で削除すること。"""
-    try:
-        filename = url.split("?")[0].split("/")[-1] or "downloaded-font.ttf"
-        suffix = "." + (filename.split(".")[-1] if "." in filename else "ttf")
-        with urlopen(url) as resp, NamedTemporaryFile(delete=False, suffix=suffix) as tf:
-            tf.write(resp.read())
-            return tf.name
-    except Exception as e:
-        st.error(f"フォントのダウンロードに失敗しました: {e}")
-        return None
+@st.cache_data(show_spinner=False)
+def _fetch_noto_sans_jp_bytes() -> bytes | None:
+    for url in FONT_CANDIDATE_URLS:
+        try:
+            with urlopen(url) as resp:
+                return resp.read()
+        except Exception:
+            continue
+    return None
 
-# フォントファイルの存在確認（URL未指定の場合のみ）
-if not font_download_url.strip() and not os.path.exists(default_font_path):
-    st.error(
-        f"指定されたフォントが見つかりません。フォントパスを確認してください: {default_font_path}"
-    )
-    st.stop()
+def _write_font_tmp(font_bytes: bytes, suffix: str = ".ttf") -> str:
+    with NamedTemporaryFile(delete=False, suffix=suffix) as tf:
+        tf.write(font_bytes)
+        return tf.name
 
 
 def tokenize_japanese(text, selected_pos, exclude_words=None):
@@ -288,13 +283,15 @@ if st.button("Wordcloud_slackver を生成"):
     else:
         tmp_font_path = None
         try:
-            # URL指定時は都度ダウンロード（ローカルにファイルを残さない）
-            effective_font_path = default_font_path
-            if font_download_url.strip():
-                tmp_font_path = _download_font_to_tmp(font_download_url.strip())
-                if not tmp_font_path:
-                    st.stop()
-                effective_font_path = tmp_font_path
+            # 常にWebからNoto Sans JPを取得（キャッシュ: メモリ）。ディスクには一時ファイルのみ。
+            font_bytes = _fetch_noto_sans_jp_bytes()
+            if not font_bytes:
+                st.error("Noto Sans JPのダウンロードに失敗しました。ネットワークやURLの到達性を確認してください。")
+                st.stop()
+            # 拡張子はttf想定、候補にotfもあるため保険で推定
+            suffix = ".otf" if b"OTTO" in font_bytes[:4] else ".ttf"
+            tmp_font_path = _write_font_tmp(font_bytes, suffix=suffix)
+            effective_font_path = tmp_font_path
 
             wc = generate_wordcloud(
                 user_input, width, height, background_color,
