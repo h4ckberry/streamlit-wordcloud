@@ -3,9 +3,6 @@ import json
 import html
 import re
 import streamlit as st
-from pathlib import Path
-from urllib.request import urlopen
-from tempfile import NamedTemporaryFile
 from janome.tokenizer import Tokenizer
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
@@ -185,41 +182,34 @@ height = st.number_input(
 # 背景色の選択
 background_color = st.color_picker("背景色を選択してください", "#ffffff")
 
-# フォント（UI と 画像生成）の設定
-# 1) UI用のWebフォント適用（任意）
-use_google_font_ui = st.checkbox("UIに Google Fonts (Noto Sans JP) を適用する", value=False)
-if use_google_font_ui:
-    st.markdown(
-        """
-        <style>
-        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@100..900&display=swap');
-        html, body, [class*="css"]  { font-family: 'Noto Sans JP', sans-serif; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+"""WordCloud用フォント（同階層に配置されたTTF/OTF）を自動検出して使用します。"""
 
-# 2) WordCloud用フォント（TTF/OTF）は常にWebから取得して使用（ローカルに保持しない）
-FONT_CANDIDATE_URLS = [
-    # 変動する可能性があるため候補を複数用意（上から順にトライ）
-    "https://github.com/googlefonts/noto-cjk/raw/main/Sans/Variable/TTF/NotoSansJP-VF.ttf",
-    "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansJP-Regular.otf",
-]
-
-@st.cache_data(show_spinner=False)
-def _fetch_noto_sans_jp_bytes() -> bytes | None:
-    for url in FONT_CANDIDATE_URLS:
-        try:
-            with urlopen(url) as resp:
-                return resp.read()
-        except Exception:
-            continue
-    return None
-
-def _write_font_tmp(font_bytes: bytes, suffix: str = ".ttf") -> str:
-    with NamedTemporaryFile(delete=False, suffix=suffix) as tf:
-        tf.write(font_bytes)
-        return tf.name
+def _find_local_font_path() -> str | None:
+    base = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        "NotoSansJP-VariableFont_wght.ttf",
+        "NotoSansJP-Regular.ttf",
+        "NotoSansJP-VF.ttf",
+        "NotoSansJP-Regular.otf",
+        "NotoSansJP.otf",
+    ]
+    for name in candidates:
+        p = os.path.join(base, name)
+        if os.path.exists(p):
+            return p
+    # フォールバック: 同階層の任意の TTF/OTF を探索（Noto優先）
+    ttf_otf = []
+    try:
+        for fname in os.listdir(base):
+            if fname.lower().endswith((".ttf", ".otf")):
+                ttf_otf.append(os.path.join(base, fname))
+    except Exception:
+        pass
+    if not ttf_otf:
+        return None
+    # Noto, JP を含むものを優先
+    ttf_otf.sort(key=lambda x: ("noto" not in x.lower(), "jp" not in x.lower(), x))
+    return ttf_otf[0]
 
 
 def tokenize_japanese(text, selected_pos, exclude_words=None):
@@ -281,17 +271,11 @@ if st.button("Wordcloud_slackver を生成"):
     elif not selected_pos:
         st.error("少なくとも1つの品詞を選択してください。")
     else:
-        tmp_font_path = None
         try:
-            # 常にWebからNoto Sans JPを取得（キャッシュ: メモリ）。ディスクには一時ファイルのみ。
-            font_bytes = _fetch_noto_sans_jp_bytes()
-            if not font_bytes:
-                st.error("Noto Sans JPのダウンロードに失敗しました。ネットワークやURLの到達性を確認してください。")
+            effective_font_path = _find_local_font_path()
+            if not effective_font_path:
+                st.error("同階層にTTF/OTFの日本語フォントが見つかりません。フォントファイルを配置してください。")
                 st.stop()
-            # 拡張子はttf想定、候補にotfもあるため保険で推定
-            suffix = ".otf" if b"OTTO" in font_bytes[:4] else ".ttf"
-            tmp_font_path = _write_font_tmp(font_bytes, suffix=suffix)
-            effective_font_path = tmp_font_path
 
             wc = generate_wordcloud(
                 user_input, width, height, background_color,
@@ -307,10 +291,3 @@ if st.button("Wordcloud_slackver を生成"):
             st.pyplot(fig)
         except Exception as e:
             st.error(f"エラーが発生しました: {e}")
-        finally:
-            # 一時フォントは削除
-            if tmp_font_path:
-                try:
-                    os.remove(tmp_font_path)
-                except Exception:
-                    pass
